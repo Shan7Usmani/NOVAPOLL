@@ -1,12 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  getPoll,
-  castVote,
-  changeVote,
-  closePoll,
-  reopenPoll,
-  pollTotal,
-} from "../lib/store.js";
+import { getPoll, castVote, changeVote, closePoll, reopenPoll, pollTotal } from "../lib/store.js";
+import { isRemote, remoteSave, remoteVote } from "../lib/remote.js";
 
 const BOT_COLORS = ["#00ff7a", "#00d9ff", "#ffb02e", "#ff3d81", "#a78bfa", "#38f0c0"];
 const BOT_BASES = ["NOVA", "XEN", "ORB", "SKY", "PULSE", "VEGA", "LYRA", "NEB", "ALT", "CRUX"];
@@ -48,6 +42,7 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
   const [myVote, setMyVote] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [now, setNow] = useState(Date.now());
+  const [sim, setSim] = useState(false);
   const personaRef = useRef(botPersona(poll.id));
 
   const total = pollTotal(poll);
@@ -75,27 +70,43 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
   useEffect(() => {
     if (!poll.expiresAt || poll.closed) return;
     if (Date.now() >= poll.expiresAt) {
-      closePoll(poll.id);
-      onUpdate(getPoll(poll.id));
+      (async () => {
+        if (isRemote) {
+          await remoteSave({ ...poll, closed: true });
+        } else {
+          closePoll(poll.id);
+        }
+        onUpdate(getPoll(poll.id));
+      })();
     }
   }, [now, poll, onUpdate]);
 
+  const botsRun = !isRemote || sim;
+
   useEffect(() => {
-    if (poll.closed) return;
+    if (poll.closed || !botsRun) return;
     let stopped = false;
     let timer;
     const persona = personaRef.current;
-    const tick = () => {
+    const cap = isRemote ? 60 : 240;
+    const tick = async () => {
       if (stopped) return;
       const cur = getPoll(poll.id);
       if (!cur || cur.closed) return;
-      const cap = cur.expiresAt ? 160 : 240;
       if (pollTotal(cur) >= cap) return;
       const idx = weightedPick(cur.options);
       const who = `${persona.base}-${(persona.seed + cur.events.length) % 90}`;
-      castVote(cur.id, idx, who);
-      onUpdate(getPoll(cur.id));
-      pushToast({ idx, who, color: persona.color });
+      if (isRemote) {
+        const data = await remoteVote(cur.id, idx, who, null);
+        if (data) {
+          onUpdate(data);
+          pushToast({ idx, who, color: persona.color });
+        }
+      } else {
+        castVote(cur.id, idx, who);
+        onUpdate(getPoll(cur.id));
+        pushToast({ idx, who, color: persona.color });
+      }
       timer = setTimeout(tick, 1500 + Math.random() * 2800);
     };
     timer = setTimeout(tick, 1200);
@@ -103,17 +114,26 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [poll.id, poll.closed, onUpdate]);
+  }, [poll.id, poll.closed, botsRun, onUpdate]);
 
-  const vote = (idx) => {
+  const vote = async (idx) => {
     if (!live) return;
-    const cur = getPoll(poll.id);
-    if (!cur) return;
     if (myVote === idx) return;
-    if (myVote !== null) changeVote(cur.id, myVote, idx, "YOU");
-    else castVote(cur.id, idx, "YOU");
-    setMyVote(idx);
-    onUpdate(getPoll(cur.id));
+    if (isRemote) {
+      const from = myVote !== null ? myVote : null;
+      const data = await remoteVote(poll.id, idx, "YOU", from);
+      if (data) {
+        setMyVote(idx);
+        onUpdate(data);
+      }
+    } else {
+      const cur = getPoll(poll.id);
+      if (!cur) return;
+      if (myVote !== null) changeVote(cur.id, myVote, idx, "YOU");
+      else castVote(cur.id, idx, "YOU");
+      setMyVote(idx);
+      onUpdate(getPoll(cur.id));
+    }
   };
 
   const share = async () => {
@@ -126,15 +146,20 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
     }
   };
 
-  const toggleClose = () => {
+  const toggleClose = async () => {
     if (live) {
-      closePoll(poll.id);
+      const next = { ...poll, closed: true };
+      if (isRemote) await remoteSave(next);
+      else closePoll(poll.id);
       pushToast({ who: null, idx: null, color: null, msg: "Poll closed — results locked" });
+      onUpdate(isRemote ? next : getPoll(poll.id));
     } else {
-      reopenPoll(poll.id);
+      const next = { ...poll, closed: false, expiresAt: null };
+      if (isRemote) await remoteSave(next);
+      else reopenPoll(poll.id);
       pushToast({ who: null, idx: null, color: null, msg: "Poll reopened for voting" });
+      onUpdate(isRemote ? next : getPoll(poll.id));
     }
-    onUpdate(getPoll(poll.id));
   };
 
   const sparks = sparkBuckets(poll.events);
@@ -225,6 +250,11 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
               : "No votes recorded"}
           </div>
           <div className="poll-tools">
+            {isRemote && (
+              <button className="btn btn-ghost btn-sm" onClick={() => setSim((s) => !s)}>
+                {sim ? "Stop simulation" : "Simulate traffic"}
+              </button>
+            )}
             <button className="btn btn-cyan btn-sm" onClick={share}>
               &#128279; Share
             </button>

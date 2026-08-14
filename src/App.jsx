@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getPoll } from "./lib/store.js";
+import { isRemote, remoteLoad, remoteSave, remoteSubscribe } from "./lib/remote.js";
 import Topbar from "./components/Topbar.jsx";
 import Home from "./components/Home.jsx";
 import Creator from "./components/Creator.jsx";
@@ -15,14 +16,21 @@ export default function App() {
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get("p");
-    if (id) {
-      const found = getPoll(id);
+    if (!id) return;
+    (async () => {
+      const remote = isRemote ? await remoteLoad(id) : null;
+      const found = remote || getPoll(id);
       if (found) {
         setPoll(found);
         setView("poll");
       }
-    }
+    })();
   }, []);
+
+  useEffect(() => {
+    if (!isRemote || !poll) return;
+    return remoteSubscribe(poll.id, (data) => setPoll(data));
+  }, [poll?.id]);
 
   const goHome = () => {
     setPoll(null);
@@ -30,28 +38,29 @@ export default function App() {
     if (location.search) history.replaceState(null, "", location.pathname);
   };
 
-  const openPoll = (id) => {
-    const found = getPoll(id);
+  const openPoll = async (id) => {
+    const remote = isRemote ? await remoteLoad(id) : null;
+    const found = remote || getPoll(id);
     if (!found) return;
     setPoll(found);
     setView("poll");
     history.replaceState(null, "", pollUrl(id));
   };
 
-  const created = (p) => {
+  const created = async (p) => {
+    if (isRemote) await remoteSave(p);
     setPoll(p);
     setView("poll");
     history.replaceState(null, "", pollUrl(p.id));
   };
 
-  const syncPoll = (p) => setPoll(p);
+  const syncPoll = useCallback((p) => setPoll(p), []);
 
   return (
     <>
       <Topbar
         onHome={goHome}
         onCreate={() => setView("create")}
-        active={view}
       />
       <main className="container" aria-live="polite">
         {view === "home" && <Home onCreate={() => setView("create")} onOpen={openPoll} />}
