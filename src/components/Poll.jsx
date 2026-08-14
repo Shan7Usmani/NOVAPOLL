@@ -42,7 +42,6 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
   const [myVote, setMyVote] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [now, setNow] = useState(Date.now());
-  const [sim, setSim] = useState(false);
   const personaRef = useRef(botPersona(poll.id));
 
   const total = pollTotal(poll);
@@ -81,10 +80,8 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
     }
   }, [now, poll, onUpdate]);
 
-  const botsRun = !isRemote || sim;
-
   useEffect(() => {
-    if (poll.closed || !botsRun) return;
+    if (poll.closed) return;
     let stopped = false;
     let timer;
     const persona = personaRef.current;
@@ -114,7 +111,7 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [poll.id, poll.closed, botsRun, onUpdate]);
+  }, [poll.id, poll.closed, onUpdate]);
 
   const vote = async (idx) => {
     if (!live) return;
@@ -138,11 +135,19 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
 
   const share = async () => {
     const url = `${location.origin}${location.pathname}?p=${poll.id}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: poll.question, url });
+        return;
+      } catch {
+        /* user dismissed share sheet — fall through to copy */
+      }
+    }
     try {
       await navigator.clipboard.writeText(url);
-      pushToast({ who: null, idx: null, color: null, msg: "Share link copied to clipboard" });
+      pushToast({ msg: "Share link copied to clipboard" });
     } catch {
-      prompt("Copy this poll link:", url);
+      pushToast({ msg: url });
     }
   };
 
@@ -250,11 +255,6 @@ export default function Poll({ poll, onUpdate, onOpen, onHome }) {
               : "No votes recorded"}
           </div>
           <div className="poll-tools">
-            {isRemote && (
-              <button className="btn btn-ghost btn-sm" onClick={() => setSim((s) => !s)}>
-                {sim ? "Stop simulation" : "Simulate traffic"}
-              </button>
-            )}
             <button className="btn btn-cyan btn-sm" onClick={share}>
               &#128279; Share
             </button>
