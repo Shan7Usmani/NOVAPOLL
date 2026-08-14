@@ -46,9 +46,11 @@ function updatePoll(patch) {
   return polls[i];
 }
 
+const isVotable = (p) => !p.closed && (!p.expiresAt || Date.now() < p.expiresAt);
+
 export function castVote(id, optIdx, who) {
   const p = getPoll(id);
-  if (!p) return null;
+  if (!p || !isVotable(p)) return null;
   const options = p.options.map((o, i) =>
     i === optIdx ? { ...o, votes: o.votes + 1 } : o
   );
@@ -61,7 +63,7 @@ export function castVote(id, optIdx, who) {
 
 export function changeVote(id, fromIdx, toIdx, who) {
   const p = getPoll(id);
-  if (!p) return null;
+  if (!p || !isVotable(p)) return null;
   const options = p.options.map((o, i) => {
     if (i === fromIdx) return { ...o, votes: Math.max(0, o.votes - 1) };
     if (i === toIdx) return { ...o, votes: o.votes + 1 };
